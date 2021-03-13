@@ -4,12 +4,14 @@ import re
 from pathlib import Path
 import os
 from pdfkit import from_url as save_pdf
+import time
 
 HOST = "https://teara.govt.nz"
 NUMBERED_PAGE_REGEX = r"/page-\d+"
 
 
 def save_page(url, path):
+    print("Saving " + str(path))
     # single_file_html = make_single_file_page(url)
     # with open(path, 'wb') as file:
     #     file.write(single_file_html.encode('utf-8'))
@@ -32,6 +34,7 @@ def make_path_name(name):
         .replace("ī", "i")\
         .replace("ō", "o")\
         .replace("ū", "u")\
+        .replace("?", "")\
         .lower()
 
 
@@ -92,3 +95,4 @@ for st, s in zip(section_titles, sections):
             else:
                 article_path = subsection_path / make_path_name(article_title_text)
             process_article(article_url, article_path, is_numbered_url)
+            time.sleep(1)

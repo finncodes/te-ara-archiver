@@ -4,36 +4,26 @@ import re
 from pathlib import Path
 import os
 from pdfkit import from_url as save_pdf
-import time
+from multiprocessing import pool, cpu_count, Lock
+from unidecode import unidecode
+from weasyprint import HTML
 
 HOST = "https://teara.govt.nz"
 NUMBERED_PAGE_REGEX = r"/page-\d+"
 
 
 def save_page(url, path):
-    print("Saving " + str(path))
-    # single_file_html = make_single_file_page(url)
-    # with open(path, 'wb') as file:
-    #     file.write(single_file_html.encode('utf-8'))
-    save_pdf(url,
-             path,
-             options={
-                 'print-media-type': None
-             })
+    HTML(url).write_pdf(str(path))
 
 
 def make_path_name(name):
     # unfortunately macrons have to be stripped as they crash wkhtmltopdf if they're in the filename
-    return name\
+    return unidecode(name)\
         .replace(" ", "_")\
+        .replace("/", "_")\
         .replace(",", "")\
         .replace("’", "")\
         .replace(":", "")\
-        .replace("ā", "a")\
-        .replace("ē", "e")\
-        .replace("ī", "i")\
-        .replace("ō", "o")\
-        .replace("ū", "u")\
         .replace("?", "")\
         .lower()
 
@@ -42,57 +32,80 @@ def check_if_numbered(url):
     return bool(re.search(NUMBERED_PAGE_REGEX, url))
 
 
-def process_article(url, path, single_page):
-    next_url = url
-    while next_url:
-        page_req = requests.get(HOST + next_url)
-        page_soup = BeautifulSoup(page_req.text, 'html.parser')
+def get_root_page(url):
+    return re.sub(NUMBERED_PAGE_REGEX, "", url)
 
-        page_title = page_soup.title.text
 
-        os.makedirs(path, exist_ok=True)
-        save_page(HOST + next_url, path / (make_path_name(page_title) + '.pdf'))
+def process_article(url, path, title):
+    print(
+        f"Saving: {url}\n",
+        f"at path: {path / (make_path_name(title) + '.pdf')}"
+    )
+    local_lock = Lock()
 
-        if single_page:
-            break
+    local_lock.acquire()
+    try:
+        print(f"Making directory {path} ...")
+        path.mkdir(parents=True, exist_ok=True)
+        print(f"{path} exists: {str(os.path.isdir(path))}")
+    finally:
+        if os.path.isdir(path):
+            local_lock.release()
+    
+    local_lock.acquire()
+    try:
+        save_page(HOST + url + '/print', path / (make_path_name(title) + '.pdf'))
+    finally:
+        local_lock.release()
 
-        next_page_link = page_soup.find('a', class_='next-text') or page_soup.find('a', id='next-wrapper')
-        if next_page_link:
-            next_url = next_page_link['href']
+
+def dedupe(params_list):
+    seen = []
+    for param_item in params_list:
+        if param_item[0] in [i[0] for i in seen]:
+            seen.append(param_item)
         else:
-            next_url = None
+            continue
+    return seen
 
 
-root_file_path = Path('./archive')
+if __name__ == '__main__':
+    root_file_path = Path('./archive')
 
-sitemap_req = requests.get("https://teara.govt.nz/en/site-map")
-soup = BeautifulSoup(sitemap_req.text, 'html.parser')
+    sitemap_req = requests.get("https://teara.govt.nz/en/site-map")
+    soup = BeautifulSoup(sitemap_req.text, 'html.parser')
 
-section_titles = soup.find_all('h2', class_='', id='')
-sections = soup.find_all('div', class_='theme-col')
+    section_titles = soup.find_all('h2', class_='', id='')
+    sections = soup.find_all('div', class_='theme-col')
 
-for st, s in zip(section_titles, sections):
-    section_title_text = st.text
-    section_path = root_file_path / make_path_name(section_title_text)
+    to_process = []
 
-    subsection_titles = s.find_all('div', class_='subtheme-col')
-    subsection_entries = s.find_all('div', class_='entry-col')
+    for st, s in zip(section_titles, sections):
+        section_title_text = st.text
+        section_path = root_file_path / make_path_name(section_title_text)
 
-    for sst, e in zip(subsection_titles, subsection_entries):
-        subsection_title_text = sst.text
-        subsection_path = section_path / make_path_name(subsection_title_text)
+        subsection_titles = s.find_all('div', class_='subtheme-col')
+        subsection_entries = s.find_all('div', class_='entry-col')
 
-        article_links = e.find_all('a')
+        for sst, e in zip(subsection_titles, subsection_entries):
+            subsection_title_text = sst.text
+            subsection_path = section_path / make_path_name(subsection_title_text)
 
-        for article in article_links:
-            article_title_text = article.text
+            article_links = e.find_all('a')
 
-            article_url = article['href']
+            for article in article_links:
+                article_title_text = article.text
 
-            is_numbered_url = check_if_numbered(article_url)
-            if is_numbered_url:
-                article_path = subsection_path
-            else:
-                article_path = subsection_path / make_path_name(article_title_text)
-            process_article(article_url, article_path, is_numbered_url)
-            time.sleep(1)
+                article_url = article['href']
+
+                is_numbered_url = check_if_numbered(article_url)
+                if is_numbered_url:
+                    params = (get_root_page(article_url), section_path, subsection_title_text)
+                else:
+                    params = (article_url, subsection_path, article_title_text)
+                to_process.append(params)
+
+    to_process = dedupe(to_process)
+
+    with pool.Pool(processes=cpu_count()) as p:
+        p.starmap(process_article, to_process)

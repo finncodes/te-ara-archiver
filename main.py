@@ -2,23 +2,26 @@ from bs4 import BeautifulSoup
 import requests
 import re
 from pathlib import Path
-import os
 from pdfkit import from_url as save_pdf
-from multiprocessing import pool, cpu_count, Lock
+from multiprocessing import pool, cpu_count
 from unidecode import unidecode
-from weasyprint import HTML
 
 HOST = "https://teara.govt.nz"
 NUMBERED_PAGE_REGEX = r"/page-\d+"
+PATH_REGEX = r"[^a-zA-Z0-9\-_.]"
 
 
 def save_page(url, path):
-    HTML(url).write_pdf(str(path))
+    save_pdf(url,
+             str(path),
+             options={
+                 'print-media-type': None
+             })
 
 
 def make_path_name(name):
     # unfortunately macrons have to be stripped as they crash wkhtmltopdf if they're in the filename
-    return unidecode(name)\
+    ascii_str = unidecode(name)\
         .replace(" ", "_")\
         .replace("/", "_")\
         .replace(",", "")\
@@ -26,6 +29,8 @@ def make_path_name(name):
         .replace(":", "")\
         .replace("?", "")\
         .lower()
+
+    return re.sub(PATH_REGEX, "", ascii_str)
 
 
 def check_if_numbered(url):
@@ -41,28 +46,15 @@ def process_article(url, path, title):
         f"Saving: {url}\n",
         f"at path: {path / (make_path_name(title) + '.pdf')}"
     )
-    local_lock = Lock()
 
-    local_lock.acquire()
-    try:
-        print(f"Making directory {path} ...")
-        path.mkdir(parents=True, exist_ok=True)
-        print(f"{path} exists: {str(os.path.isdir(path))}")
-    finally:
-        if os.path.isdir(path):
-            local_lock.release()
-    
-    local_lock.acquire()
-    try:
-        save_page(HOST + url + '/print', path / (make_path_name(title) + '.pdf'))
-    finally:
-        local_lock.release()
+    path.mkdir(parents=True, exist_ok=True)
+    save_page(HOST + url + '/print', path / (make_path_name(title) + '.pdf'))
 
 
 def dedupe(params_list):
     seen = []
     for param_item in params_list:
-        if param_item[0] in [i[0] for i in seen]:
+        if param_item[0] not in [i[0] for i in seen]:
             seen.append(param_item)
         else:
             continue
@@ -73,6 +65,9 @@ if __name__ == '__main__':
     root_file_path = Path('./archive')
 
     sitemap_req = requests.get("https://teara.govt.nz/en/site-map")
+    if sitemap_req.status_code >= 400:
+        print("Can't reach Te Ara right now: returned " + str(sitemap_req.status_code))
+        exit(-1)
     soup = BeautifulSoup(sitemap_req.text, 'html.parser')
 
     section_titles = soup.find_all('h2', class_='', id='')
@@ -82,6 +77,10 @@ if __name__ == '__main__':
 
     for st, s in zip(section_titles, sections):
         section_title_text = st.text
+
+        if section_title_text == "Site Information":
+            continue
+
         section_path = root_file_path / make_path_name(section_title_text)
 
         subsection_titles = s.find_all('div', class_='subtheme-col')

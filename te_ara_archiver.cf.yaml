@@ -1,0 +1,42 @@
+Parameters:
+  BuildKey:
+    Type: String
+    Description: "The key to where the build is located in the S3 bucket"
+Resources:
+  TeAraLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+  TeAraLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: "te-ara-archiver-builds"
+        S3Key: !Ref BuildKey
+      Role: !GetAtt TeAraLambdaRole.Arn
+      Description: "Function that backs up and publishes Te Ara"
+      FunctionName: "TeAraArchiver"
+      Handler: "main.run"
+      MemorySize: 512
+      Runtime: "python3.9"
+      Timeout: 500
+  TeAraLambdaSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: "rate(28 days)"
+      Targets:
+        - Id: "1"
+          Arn: !GetAtt TeAraLambda.Arn
+  TeAraSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt TeAraLambda.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt TeAraLambdaSchedule.Arn

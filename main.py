@@ -61,7 +61,7 @@ def dedupe(params_list):
     return seen
 
 
-if __name__ == '__main__':
+def run():
     root_file_path = Path('./archive')
 
     sitemap_req = requests.get("https://teara.govt.nz/en/site-map")
@@ -108,3 +108,7 @@ if __name__ == '__main__':
 
     with pool.Pool(processes=cpu_count()) as p:
         p.starmap(process_article, to_process)
+
+
+if __name__ == '__main__':
+    run()
